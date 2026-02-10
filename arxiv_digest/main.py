@@ -1,4 +1,5 @@
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
@@ -7,6 +8,8 @@ import feedparser
 import yaml
 
 from arxiv_digest.summarize_free import summarize_paper_free
+from arxiv_digest.render_html import render_digest_html
+from arxiv_digest.emailer import send_email
 
 STATE_FILE = Path("seen.json")
 
@@ -60,13 +63,24 @@ def main() -> None:
     categories: List[str] = cfg.get("feeds", [])
     max_items = int(cfg.get("max_items_per_feed", 50))
     include_keywords = cfg.get("include_keywords", [])
-    threshold = float(cfg.get("threshold", 3.5))
 
-    seen = load_seen()
+    # Flags
+    email_mode = "--email" in sys.argv
+    ignore_seen = "--ignore-seen" in sys.argv  # testing: treat everything as new
+
+    # Safety caps so emails don't get enormous
+    email_cap = int(cfg.get("email_cap", 150))     # max papers included in email
+    print_cap = int(cfg.get("print_cap", 50))      # max papers printed to console
+
+    seen = set() if ignore_seen else load_seen()
     collected: List[Dict] = []
 
     for cat in categories:
         feed = feedparser.parse(rss_url(cat))
+
+        if getattr(feed, "bozo", 0):
+            print(f"[WARN] RSS parse issue for {cat}: {getattr(feed, 'bozo_exception', '')}")
+
         entries = getattr(feed, "entries", [])[:max_items]
         for e in entries:
             item = normalize_entry(e)
@@ -74,6 +88,7 @@ def main() -> None:
                 continue
             if item["id"] in seen:
                 continue
+
             seen.add(item["id"])
             item["categories"] = [cat]
             collected.append(item)
@@ -90,7 +105,7 @@ def main() -> None:
     papers = list(deduped.values())
     papers.sort(key=lambda x: x.get("published", ""), reverse=True)
 
-    scored: List[Dict] = []
+    # Add free TL;DR/keywords for each (no filtering)
     for p in papers:
         cats = sorted(set(p["categories"]))
         s = summarize_paper_free(
@@ -100,36 +115,38 @@ def main() -> None:
             categories=cats,
             include_keywords=include_keywords,
         )
-        p.update({
-            "relevance": s["relevance"],
-            "novelty": s["novelty"],
-            "tldr": s["tldr"],
-            "why": s["why"],
-            "keywords": s["keywords"],
-        })
-        scored.append(p)
-
-    interesting = [p for p in scored if p["relevance"] >= threshold]
-    interesting.sort(key=lambda x: (x["relevance"], x["novelty"]), reverse=True)
+        p.update(
+            {
+                "relevance": s["relevance"],  # still computed; no longer used for filtering
+                "novelty": s["novelty"],
+                "tldr": s["tldr"],
+                "why": s["why"],
+                "keywords": s["keywords"],
+            }
+        )
+        p["categories"] = cats
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     print(f"\n=== arXiv Digest (FREE) — {now} ===")
-    print(f"New papers since last run: {len(papers)}")
-    print(f"Interesting (score ≥ {threshold}): {len(interesting)}\n")
+    print(f"New papers since last run: {len(papers)}\n")
 
-    for p in interesting[:50]:
+    for p in papers[:print_cap]:
         authors = ", ".join(p["authors"][:6]) + (" et al." if len(p["authors"]) > 6 else "")
         print(f"- {p['title']}")
-        print(f"  Score: {p['relevance']:.1f}")
-        print(f"  TL;DR: {p['tldr']}")
-        print(f"  Why:   {p['why']}")
-        print(f"  Keywords: {', '.join(p['keywords'])}")
+        print(f"  Categories: {', '.join(p['categories'])}")
         print(f"  Authors: {authors or 'N/A'}")
-        print(f"  Categories: {', '.join(sorted(set(p['categories'])))}")
+        print(f"  TL;DR: {p['tldr']}")
         print(f"  Abstract: {p['abs_url']}")
         print(f"  PDF:      {p['pdf_url']}\n")
 
-    save_seen(seen)
+    if email_mode:
+        subject = f"arXiv Daily Digest — {len(papers)} new papers"
+        html = render_digest_html(papers[:email_cap], generated_at_utc=now.replace(" UTC", ""))
+        send_email(subject, html)
+        print("[INFO] Email sent.")
+
+    if not ignore_seen:
+        save_seen(seen)
 
 
 if __name__ == "__main__":

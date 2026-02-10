@@ -15,3 +15,8 @@ feeds:
   - econ
 
 max_items_per_feed: 50
+
+threshold: 1.5
+
+email_cap: 150
+print_cap: 50
