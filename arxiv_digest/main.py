@@ -68,19 +68,17 @@ def main() -> None:
     for cat in categories:
         feed = feedparser.parse(rss_url(cat))
         entries = getattr(feed, "entries", [])[:max_items]
-
         for e in entries:
             item = normalize_entry(e)
             if not item["id"]:
                 continue
             if item["id"] in seen:
                 continue
-
             seen.add(item["id"])
             item["categories"] = [cat]
             collected.append(item)
 
-    # De-dupe cross-lists by paper id (abs url)
+    # De-dupe cross-lists
     deduped: Dict[str, Dict] = {}
     for item in collected:
         pid = item["id"]
@@ -94,11 +92,12 @@ def main() -> None:
 
     scored: List[Dict] = []
     for p in papers:
+        cats = sorted(set(p["categories"]))
         s = summarize_paper_free(
             paper_id=p["id"],
             title=p["title"],
             abstract=p["abstract"],
-            categories=list(sorted(set(p["categories"]))),
+            categories=cats,
             include_keywords=include_keywords,
         )
         p.update({
