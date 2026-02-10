@@ -1,0 +1,17 @@
+feeds:
+  - astro-ph
+  - cond-mat
+  - gr-qc
+  - hep-ex
+  - math-ph
+  - nucl-ex
+  - nucl-th
+  - physics
+  - quant-ph
+  - math
+  - cs        # CoRR
+  - q-bio
+  - stat
+  - econ
+
+max_items_per_feed: 50
